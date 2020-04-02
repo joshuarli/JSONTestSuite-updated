@@ -6,6 +6,8 @@ import os.path
 import subprocess
 import json
 from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import cpu_count
 
 from os import listdir
 from time import strftime
@@ -20,6 +22,71 @@ envs = listdir(PARSERS_DIR)
 logq = Queue()
 
 
+def run_test(env, restrict_to_path):
+    for root, dirs, files in os.walk(TEST_CASES_DIR_PATH):
+        json_files = (f for f in files if f.endswith(".json"))
+        for filename in json_files:
+
+            if restrict_to_path:
+                restrict_to_filename = os.path.basename(restrict_to_path)
+                if filename != restrict_to_filename:
+                    continue
+
+            file_path = os.path.join(root, filename)
+
+            cmdline = [
+                "docker",
+                "run",
+                # not creating net namespaces shaves off ~0.5s
+                "--net",
+                "host",
+                "-v",
+                f"{file_path}:/tmp/test-payload.json",
+                f"jsontestsuite-{env}",
+            ]
+
+            # print("--", " ".join(cmdline))
+
+            try:
+                status = subprocess.call(
+                    cmdline,
+                    stderr=subprocess.STDOUT,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                print("timeout expired")
+                s = "%s\tTIMEOUT\t%s" % (env, filename)
+                logq.put(s)
+                continue
+
+            result = None
+            if status == 0:
+                result = "PASS"
+            elif status == 1:
+                result = "FAIL"
+            else:
+                result = "CRASH"
+
+            s = None
+            if result == "CRASH":
+                s = "%s\tCRASH\t%s" % (env, filename)
+            elif filename.startswith("y_") and result != "PASS":
+                s = "%s\tSHOULD_HAVE_PASSED\t%s" % (env, filename)
+            elif filename.startswith("n_") and result == "PASS":
+                s = "%s\tSHOULD_HAVE_FAILED\t%s" % (env, filename)
+            elif filename.startswith("i_") and result == "PASS":
+                s = "%s\tIMPLEMENTATION_PASS\t%s" % (env, filename)
+            elif filename.startswith("i_") and result != "PASS":
+                s = "%s\tIMPLEMENTATION_FAIL\t%s" % (env, filename)
+
+            # assert s is not None
+            if s is None:
+                s = "%s\tEXPECTED_RESULT\t%s" % (env, filename)
+
+            print(s)
+            logq.put(s)
+
+
 def run_tests(restrict_to_path=None, restrict_to_program=None):
     if isinstance(restrict_to_program, io.TextIOBase):
         restrict_to_program = json.load(restrict_to_program)
@@ -29,69 +96,9 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
     if restrict_to_program:
         envs = filter(lambda x: x in restrict_to_program, envs)
 
-    for env in envs:
-        for root, dirs, files in os.walk(TEST_CASES_DIR_PATH):
-            json_files = (f for f in files if f.endswith(".json"))
-            for filename in json_files:
-
-                if restrict_to_path:
-                    restrict_to_filename = os.path.basename(restrict_to_path)
-                    if filename != restrict_to_filename:
-                        continue
-
-                file_path = os.path.join(root, filename)
-
-                cmdline = [
-                    "docker",
-                    "run",
-                    # not creating net namespaces shaves off ~0.5s
-                    "--net",
-                    "host",
-                    "-v",
-                    f"{file_path}:/tmp/test-payload.json",
-                    f"jsontestsuite-{env}",
-                ]
-
-                # print("--", " ".join(cmdline))
-
-                try:
-                    status = subprocess.call(
-                        cmdline,
-                        stderr=subprocess.STDOUT,
-                        timeout=5,
-                    )
-                except subprocess.TimeoutExpired:
-                    print("timeout expired")
-                    s = "%s\tTIMEOUT\t%s" % (env, filename)
-                    logq.put(s)
-                    continue
-
-                result = None
-                if status == 0:
-                    result = "PASS"
-                elif status == 1:
-                    result = "FAIL"
-                else:
-                    result = "CRASH"
-
-                s = None
-                if result == "CRASH":
-                    s = "%s\tCRASH\t%s" % (env, filename)
-                elif filename.startswith("y_") and result != "PASS":
-                    s = "%s\tSHOULD_HAVE_PASSED\t%s" % (env, filename)
-                elif filename.startswith("n_") and result == "PASS":
-                    s = "%s\tSHOULD_HAVE_FAILED\t%s" % (env, filename)
-                elif filename.startswith("i_") and result == "PASS":
-                    s = "%s\tIMPLEMENTATION_PASS\t%s" % (env, filename)
-                elif filename.startswith("i_") and result != "PASS":
-                    s = "%s\tIMPLEMENTATION_FAIL\t%s" % (env, filename)
-
-                # assert s is not None
-                if s is None:
-                    s = "%s\tEXPECTED_RESULT\t%s" % (env, filename)
-
-                print(s)
-                logq.put(s)
+    with ThreadPoolExecutor(max_workers=cpu_count()*2) as pool:
+        for env in envs:
+            pool.submit(run_test, env, restrict_to_path)
 
 
 def f_underline_non_printable_bytes(bytes):

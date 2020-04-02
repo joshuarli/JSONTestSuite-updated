@@ -4,6 +4,8 @@ I'm also dockerizing the test suite to more easily get finer grained control ove
 
 Will be re-adding json parsers I find interesting.
 
+Oh, also, run_tests is multithreaded now since sequential `docker run`s are painfully slow.
+
 
 # JSON Parsing Test Suite
 A comprehensive test suite for RFC 8259 compliant JSON parsers
