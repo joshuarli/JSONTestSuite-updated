@@ -5,7 +5,6 @@ import os
 import os.path
 import subprocess
 import json
-import shutil
 
 from os import listdir
 from time import strftime
@@ -19,18 +18,11 @@ LOG_FILE_PATH = os.path.join(LOGS_DIR_PATH, LOG_FILENAME)
 
 INVALID_BINARY_FORMAT = 8
 
-programs = {
-    "python2.7.17": {
-        "url": "",
-        "cmdline": [
-            "docker",
-            "run",
-            # not creating net namespaces shaves off ~0.5s
-            "--net",
-            "host",
-        ],
-    },
-}
+# TODO: just list parsers dir
+envs = [
+    "python-2.7.17",
+    "python-3.7.7",
+]
 
 
 def run_tests(restrict_to_path=None, restrict_to_program=None):
@@ -38,25 +30,15 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
     FNULL = open(os.devnull, "w")
     log_file = open(LOG_FILE_PATH, "w")
 
-    prog_names = list(programs.keys())
-    prog_names.sort()
-
     if isinstance(restrict_to_program, io.TextIOBase):
         restrict_to_program = json.load(restrict_to_program)
 
+    global envs
+
     if restrict_to_program:
-        prog_names = filter(lambda x: x in restrict_to_program, prog_names)
+        envs = filter(lambda x: x in restrict_to_program, envs)
 
-    for prog_name in prog_names:
-        d = programs[prog_name]
-
-        url = d["url"]
-        cmdline = d["cmdline"]
-
-        if not shutil.which(cmdline[0]):
-            print("-- skip non-existing", cmdline[0])
-            continue
-
+    for env in envs:
         for root, dirs, files in os.walk(TEST_CASES_DIR_PATH):
             json_files = (f for f in files if f.endswith(".json"))
             for filename in json_files:
@@ -70,17 +52,22 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
 
                 my_stdin = FNULL
 
-                a = cmdline + [
+                cmdline = [
+                    "docker",
+                    "run",
+                    # not creating net namespaces shaves off ~0.5s
+                    "--net",
+                    "host",
                     "-v",
                     f"{file_path}:/tmp/test-payload.json",
-                    f"jsontestsuite-{prog_name}",
+                    f"jsontestsuite-{env}",
                 ]
 
-                print("--", " ".join(a))
+                # print("--", " ".join(cmdline))
 
                 try:
                     status = subprocess.call(
-                        a,
+                        cmdline,
                         stdin=my_stdin,
                         stdout=FNULL,
                         stderr=subprocess.STDOUT,
@@ -88,15 +75,9 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
                     )
                 except subprocess.TimeoutExpired:
                     print("timeout expired")
-                    s = "%s\tTIMEOUT\t%s" % (prog_name, filename)
+                    s = "%s\tTIMEOUT\t%s" % (env, filename)
                     log_file.write("%s\n" % s)
-                    print("RESULT:", result)
                     continue
-                except OSError as e:
-                    if e.errno == INVALID_BINARY_FORMAT:
-                        print("-- skip invalid-binary", commands[0])
-                        continue
-                    raise e
 
                 result = None
                 if status == 0:
@@ -108,19 +89,19 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
 
                 s = None
                 if result == "CRASH":
-                    s = "%s\tCRASH\t%s" % (prog_name, filename)
+                    s = "%s\tCRASH\t%s" % (env, filename)
                 elif filename.startswith("y_") and result != "PASS":
-                    s = "%s\tSHOULD_HAVE_PASSED\t%s" % (prog_name, filename)
+                    s = "%s\tSHOULD_HAVE_PASSED\t%s" % (env, filename)
                 elif filename.startswith("n_") and result == "PASS":
-                    s = "%s\tSHOULD_HAVE_FAILED\t%s" % (prog_name, filename)
+                    s = "%s\tSHOULD_HAVE_FAILED\t%s" % (env, filename)
                 elif filename.startswith("i_") and result == "PASS":
-                    s = "%s\tIMPLEMENTATION_PASS\t%s" % (prog_name, filename)
+                    s = "%s\tIMPLEMENTATION_PASS\t%s" % (env, filename)
                 elif filename.startswith("i_") and result != "PASS":
-                    s = "%s\tIMPLEMENTATION_FAIL\t%s" % (prog_name, filename)
+                    s = "%s\tIMPLEMENTATION_FAIL\t%s" % (env, filename)
 
                 # assert s is not None
                 if s is None:
-                    s = "%s\tEXPECTED_RESULT\t%s" % (prog_name, filename)
+                    s = "%s\tEXPECTED_RESULT\t%s" % (env, filename)
 
                 print(s)
                 log_file.write("%s\n" % s)
@@ -149,7 +130,7 @@ def f_underline_non_printable_bytes(bytes):
     if has_non_printable_characters:
         try:
             html += " <=> %s" % bytes.decode("utf-8", errors="ignore")
-        except:
+        except Exception:
             pass
 
     if len(bytes) > 36:
@@ -256,7 +237,6 @@ def f_tests_with_same_results(libs, status_for_lib_for_file):
     files.sort()
 
     for f in files:
-        prefix = os.path.basename(f)[:1]
         lib_status_for_file = []
         for l in libs:
             if l in status_for_lib_for_file[f]:
@@ -304,9 +284,6 @@ def generate_report(report_path, keep_only_first_result_in_set=False):
         <BODY>
         """
         )
-
-        prog_names = list(programs.keys())
-        prog_names.sort()
 
         libs = list(status_for_path_for_lib.keys())
         libs.sort()
@@ -384,8 +361,6 @@ def generate_report(report_path, keep_only_first_result_in_set=False):
 
 
 if __name__ == "__main__":
-    restrict_to_path = None
-
     import argparse
 
     parser = argparse.ArgumentParser()
