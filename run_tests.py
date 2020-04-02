@@ -18,11 +18,7 @@ LOG_FILE_PATH = os.path.join(LOGS_DIR_PATH, LOG_FILENAME)
 
 INVALID_BINARY_FORMAT = 8
 
-# TODO: just list parsers dir
-envs = [
-    "python-2.7.17",
-    "python-3.7.7",
-]
+envs = listdir(PARSERS_DIR)
 
 
 def run_tests(restrict_to_path=None, restrict_to_program=None):
