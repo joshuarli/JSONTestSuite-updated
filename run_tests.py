@@ -5,6 +5,7 @@ import os
 import os.path
 import subprocess
 import json
+from queue import Queue
 
 from os import listdir
 from time import strftime
@@ -12,20 +13,14 @@ from time import strftime
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 PARSERS_DIR = os.path.join(BASE_DIR, "parsers")
 TEST_CASES_DIR_PATH = os.path.join(BASE_DIR, "test_parsing")
-LOGS_DIR_PATH = os.path.join(BASE_DIR, "results")
-LOG_FILENAME = "logs.txt"
-LOG_FILE_PATH = os.path.join(LOGS_DIR_PATH, LOG_FILENAME)
 
 INVALID_BINARY_FORMAT = 8
 
 envs = listdir(PARSERS_DIR)
+logq = Queue()
 
 
 def run_tests(restrict_to_path=None, restrict_to_program=None):
-
-    FNULL = open(os.devnull, "w")
-    log_file = open(LOG_FILE_PATH, "w")
-
     if isinstance(restrict_to_program, io.TextIOBase):
         restrict_to_program = json.load(restrict_to_program)
 
@@ -46,8 +41,6 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
 
                 file_path = os.path.join(root, filename)
 
-                my_stdin = FNULL
-
                 cmdline = [
                     "docker",
                     "run",
@@ -64,15 +57,13 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
                 try:
                     status = subprocess.call(
                         cmdline,
-                        stdin=my_stdin,
-                        stdout=FNULL,
                         stderr=subprocess.STDOUT,
                         timeout=5,
                     )
                 except subprocess.TimeoutExpired:
                     print("timeout expired")
                     s = "%s\tTIMEOUT\t%s" % (env, filename)
-                    log_file.write("%s\n" % s)
+                    logq.put(s)
                     continue
 
                 result = None
@@ -100,10 +91,7 @@ def run_tests(restrict_to_path=None, restrict_to_program=None):
                     s = "%s\tEXPECTED_RESULT\t%s" % (env, filename)
 
                 print(s)
-                log_file.write("%s\n" % s)
-
-    FNULL.close()
-    log_file.close()
+                logq.put(s)
 
 
 def f_underline_non_printable_bytes(bytes):
@@ -252,14 +240,14 @@ def f_tests_with_same_results(libs, status_for_lib_for_file):
     return r
 
 
-def generate_report(report_path, keep_only_first_result_in_set=False):
+def generate_report(log_dir_path, report_path, keep_only_first_result_in_set=False):
 
     (status_for_lib_for_file, libs) = f_status_for_lib_for_file(
-        TEST_CASES_DIR_PATH, LOGS_DIR_PATH
+        TEST_CASES_DIR_PATH, log_dir_path
     )
 
     status_for_path_for_lib = f_status_for_path_for_lib(
-        TEST_CASES_DIR_PATH, LOGS_DIR_PATH
+        TEST_CASES_DIR_PATH, log_dir_path
     )
 
     tests_with_same_results = f_tests_with_same_results(libs, status_for_lib_for_file)
@@ -371,7 +359,13 @@ if __name__ == "__main__":
 
     run_tests(args.restrict_to_path, args.restrict_to_program)
 
+    # dump logs to disk
+    with open(os.path.join(BASE_DIR, "results", "logs.txt"), "wt") as f:
+        while logq.qsize():
+            f.write(logq.get() + "\n")
+
     generate_report(
+        os.path.join(BASE_DIR, "results"),
         os.path.join(BASE_DIR, "results/parsing.html"),
         keep_only_first_result_in_set=False,
     )
