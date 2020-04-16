@@ -368,7 +368,7 @@ if __name__ == "__main__":
 
     # dump logs to disk
     with open(os.path.join(BASE_DIR, "results", "logs.txt"), "wt") as f:
-        while logq.qsize():
+        while not logq.empty():
             f.write(logq.get() + "\n")
 
     generate_report(
